@@ -1,0 +1,10 @@
+# G4 ANNEX_3 X-1: no analytics events and no error details on the page
+[browser]
+gatherUsageStats = false
+
+[client]
+showErrorDetails = false
+toolbarMode = "minimal"
+
+[server]
+fileWatcherType = "none"
