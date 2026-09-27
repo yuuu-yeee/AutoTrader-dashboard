@@ -11,6 +11,7 @@ API = "https://api.github.com"
 STATE_REPO, INPUTS_REPO = "yuuu-yeee/AutoTrader", "yuuu-yeee/AutoTrader-ops-inputs"
 STATE_BRANCH = "ops/phase7-shadow-state"
 MODES = ("synthetic", "live")
+FOLDERS = {"synthetic": "synthetic_v2", "live": "live"}  # G4 ANNEX_6 A6-3: the synthetic state restarted in synthetic_v2/
 
 
 class ReaderError(RuntimeError):
@@ -21,7 +22,7 @@ class GitHubReader:
     def __init__(self, token: str, mode: str = "synthetic"):
         if mode not in MODES or not isinstance(token, str) or not token:
             raise ReaderError("READER_CONFIGURATION")
-        self._token, self.mode = token, mode
+        self._token, self.mode, self.folder = token, mode, FOLDERS[mode]
 
     def _get(self, repo: str, path: str, ref: str | None = None) -> dict | list:
         if repo not in (STATE_REPO, INPUTS_REPO):
@@ -40,13 +41,13 @@ class GitHubReader:
         return json.loads(base64.b64decode(item["content"]).decode("utf-8"))
 
     def state(self) -> dict:
-        return self._file(STATE_REPO, f"{self.mode}/state.json", STATE_BRANCH)
+        return self._file(STATE_REPO, f"{self.folder}/state.json", STATE_BRANCH)
 
     def record(self, digest: str) -> dict:
         if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
             raise ReaderError("DIGEST_INVALID")
-        return self._file(INPUTS_REPO, f"{self.mode}/{digest}.json")
+        return self._file(INPUTS_REPO, f"{self.folder}/{digest}.json")
 
     def last_run_time_utc(self) -> str | None:
-        commits = self._get(STATE_REPO, f"commits?sha={STATE_BRANCH}&path={self.mode}/state.json&per_page=1")
+        commits = self._get(STATE_REPO, f"commits?sha={STATE_BRANCH}&path={self.folder}/state.json&per_page=1")
         return commits[0]["commit"]["committer"]["date"] if commits else None
