@@ -59,11 +59,31 @@ def _norm(text: str) -> str:
     return text.strip().lower().replace(" ", "_").replace("-", "_")
 
 
+def _words(text: str) -> list[str]:
+    """English words: split at every character that is not a letter or digit (the underscore included) and at a case boundary
+    (TotalReturn -> total, return; NAVValue -> nav, value)."""
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", text)
+    return [w for w in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if w]
+
+
+def _forms(word: str) -> set[str]:
+    """The word and its forms without a final S or ES (RETURNS -> return, CLOSES -> close)."""
+    forms = {word}
+    if len(word) > 2 and word.endswith("s"):
+        forms.add(word[:-1])
+    if len(word) > 3 and word.endswith("es"):
+        forms.add(word[:-2])
+    return forms
+
+
 def _contains_token(text: str, token: str) -> bool:
-    normalized, needle = _norm(text), _norm(token)
-    if needle.isascii():
-        return re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", normalized) is not None
-    return needle in normalized
+    """An English token (one or more words joined by _) matches a run of whole words, a word also in its singular form; a Korean token
+    matches as a substring."""
+    needle = _norm(token)
+    if not needle.isascii():
+        return needle in _norm(text)
+    parts, words = needle.split("_"), _words(text)
+    return any(all(p in _forms(w) for p, w in zip(parts, words[i:i + len(parts)])) for i in range(len(words) - len(parts) + 1))
 
 
 def build_view(state: dict, record: dict | None, last_run_time_utc: str | None = None) -> dict:
@@ -110,7 +130,7 @@ def screen_problems(view: dict) -> list[str]:
         for key in value if isinstance(value, dict) else ():
             if any(_contains_token(str(key), t) for t in TOKENS):
                 problems.append(f"NESTED_KEY_FORBIDDEN:{name}.{key}")
-        text = _norm(json.dumps(value, ensure_ascii=False))
+        text = json.dumps(value, ensure_ascii=False)  # not lower-cased first: _words needs the case boundaries
         problems += [f"TOKEN_IN_VALUE:{name}:{t}" for t in TOKENS if _contains_token(text, t)]
     problems += [f"TOKEN_IN_LABEL:{k}:{t}" for k, label in LABELS_KO.items() for t in TOKENS if _contains_token(label, t)]
     if table_sha256() != TABLE_SHA256:
