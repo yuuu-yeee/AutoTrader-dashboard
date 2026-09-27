@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from decimal import Decimal
 
 # copy of G4 prohibited_report_keys (frozen contract 89f9f48); tests/track_c/test_ops_dashboard.py checks it against track_c/ops/reporting.py
@@ -58,6 +59,13 @@ def _norm(text: str) -> str:
     return text.strip().lower().replace(" ", "_").replace("-", "_")
 
 
+def _contains_token(text: str, token: str) -> bool:
+    normalized, needle = _norm(text), _norm(token)
+    if needle.isascii():
+        return re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", normalized) is not None
+    return needle in normalized
+
+
 def build_view(state: dict, record: dict | None, last_run_time_utc: str | None = None) -> dict:
     """The screen fields. Point-in-time values need the input record of the state's last session with a close for every holding."""
     ledger = state.get("ledger", {})
@@ -94,16 +102,17 @@ def screen_problems(view: dict) -> list[str]:
     for name, value in view.items():
         if name not in SCREEN_FIELDS:
             problems.append(f"FIELD_NOT_ALLOWED:{name}")
-        if name not in ALLOWED_POINT_IN_TIME and any(w in _norm(name) for w in (*TOKENS, *VALUATION_WORDS)):
+        if name not in ALLOWED_POINT_IN_TIME and (any(_contains_token(name, t) for t in TOKENS)
+                                                  or any(w in _norm(name) for w in VALUATION_WORDS)):
             problems.append(f"FIELD_NAME_FORBIDDEN:{name}")
         if isinstance(value, list) and (name != "ALERTS" or any(not isinstance(v, str) for v in value)):
             problems.append(f"LIST_VALUE_NOT_ALLOWED:{name}")
         for key in value if isinstance(value, dict) else ():
-            if any(t in _norm(str(key)) for t in TOKENS):
+            if any(_contains_token(str(key), t) for t in TOKENS):
                 problems.append(f"NESTED_KEY_FORBIDDEN:{name}.{key}")
-        text = json.dumps(value, ensure_ascii=False)
-        problems += [f"KOREAN_TOKEN_IN_VALUE:{name}:{t}" for t in TOKENS if not t.isascii() and t in text]
-    problems += [f"KOREAN_TOKEN_IN_LABEL:{k}:{t}" for k, label in LABELS_KO.items() for t in TOKENS if not t.isascii() and t in label]
+        text = _norm(json.dumps(value, ensure_ascii=False))
+        problems += [f"TOKEN_IN_VALUE:{name}:{t}" for t in TOKENS if _contains_token(text, t)]
+    problems += [f"TOKEN_IN_LABEL:{k}:{t}" for k, label in LABELS_KO.items() for t in TOKENS if _contains_token(label, t)]
     if table_sha256() != TABLE_SHA256:
         problems.append("FORBIDDEN_TABLE_HASH_MISMATCH")
     return problems
