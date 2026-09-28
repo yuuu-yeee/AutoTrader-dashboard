@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import json
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 API = "https://api.github.com"
 STATE_REPO, INPUTS_REPO = "yuuu-yeee/AutoTrader", "yuuu-yeee/AutoTrader-ops-inputs"
@@ -51,3 +52,25 @@ class GitHubReader:
     def last_run_time_utc(self) -> str | None:
         commits = self._get(STATE_REPO, f"commits?sha={STATE_BRANCH}&path={self.folder}/state.json&per_page=1")
         return commits[0]["commit"]["committer"]["date"] if commits else None
+
+    def state_history(self) -> list[dict]:
+        """G4 ANNEX_11: every committed state of the folder, oldest first (read in memory when the page opens; nothing is kept)."""
+        shas, page = [], 1
+        while True:
+            batch = self._get(STATE_REPO, f"commits?sha={STATE_BRANCH}&path={self.folder}/state.json&per_page=100&page={page}")
+            shas += [c["sha"] for c in batch]
+            if len(batch) < 100:
+                break
+            page += 1
+        for sha in shas:
+            if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
+                raise ReaderError("COMMIT_INVALID")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            states = list(pool.map(lambda sha: self._file(STATE_REPO, f"{self.folder}/state.json", sha), shas))
+        return states[::-1]
+
+    def records(self, digests: dict[str, str]) -> dict[str, dict]:
+        """G4 ANNEX_11: {session: input record} for the given {session: digest}."""
+        sessions = sorted(digests)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            return dict(zip(sessions, pool.map(lambda s: self.record(digests[s]), sessions)))

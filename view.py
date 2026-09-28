@@ -4,7 +4,10 @@ its last session; nothing is written anywhere and there is no history, chart, ta
 
 Screen fields are an allow-list. The forbidden-key table is a hash-pinned copy of G4 prohibited_report_keys; exceptions are per field
 only (ANNEX_3 K-1): CURRENT_TOTAL_EQUITY_POINT_IN_TIME and CURRENT_EXACT_WEIGHT_POINT_IN_TIME. Any other field whose name contains a
-forbidden token or a weight or valuation word fails (K-2, REVIEWER rule)."""
+forbidden token or a weight or valuation word fails (K-2, REVIEWER rule).
+
+G4 ANNEX_11 (USER 2026-09-28): the USER-only reference figures (valuation over time, gains, time-weighted return, holdings) are computed
+in perf.py on page load; this point-in-time view and its check stay as they are and feed the operation status tab and the weights."""
 from __future__ import annotations
 
 import hashlib
