@@ -46,6 +46,27 @@ LABELS_KO = {"LAST_RUN_SESSION": "마지막 처리 장", "LAST_RUN_TIME_UTC": "�
              "CURRENT_EXACT_WEIGHT_POINT_IN_TIME": "지금 시점의 정확한 비중", "CURRENT_TOTAL_EQUITY_POINT_IN_TIME": "지금 시점 총금액(USD)"}
 
 
+# G4 ANNEX_8 A8-2 (REVIEWER): the fixed alert and error codes the engine registers, each with a neutral Korean label. A registered code
+# may be shown as it is; any other string (free text) is screened for the forbidden tokens and, in ALERTS, the valuation words too.
+# tests/track_c/test_g4_annex_8.py checks that every alert code of the engine is here and that no label holds a forbidden token.
+CODE_LABELS_KO = {
+    "BAND_BREACH_AFTER_DEPLOYMENT": "배분 후 밴드 이탈", "BUY_BLOCKED": "매수 보류", "BUY_BLOCKED_POLICY_ALERT": "정책 경보로 매수 보류",
+    "CA_BLOCK": "기업행동 차단", "CASH_MISMATCH": "현금 대사 불일치", "CORPORATE_ACTION_PENDING_BROKER_REPORT": "증권사 기업행동 보고 대기",
+    "CORPORATE_ACTION_RELEASE_INCOMPLETE": "기업행동 차단 해제 미완료", "COST_ABOVE_PLAN": "계획보다 비용 큼",
+    "COST_EXCEEDED_PLAN": "계획 비용 초과", "DATA_MISSING": "자료 없음", "DATA_STALE": "자료 지연", "DEPLOYMENT_APPLIED": "코드 배포 적용",
+    "DIVIDEND_WITHHOLDING_DIFFERS_FROM_COMPUTED": "원천징수액이 계산과 다름", "ENGINE_HALT": "엔진 정지",
+    "FEE_ABOVE_ESTIMATE": "수수료가 추정보다 큼", "FEE_EXCEEDED_ESTIMATE": "수수료 추정 초과", "FILL_OPEN_PRICE_MISSING": "체결 시가 없음",
+    "FINALIZATION_RECHECK_NO_CHANGE": "13:30 재확인 변경 없음", "FREE_CASH_BELOW_FLOOR": "자유현금 하한 미만", "FX_FINALIZED": "환율 확정",
+    "INPUT_REVISED": "입력 수정됨", "PARTIAL_FILL": "부분 체결", "PENDING_REDUCED_TO_FREE_CASH": "대기 현금을 자유현금 한도로 줄임",
+    "PLAN_INPUTS_DEFERRED_DATA_MISSING": "자료 없음으로 계획 입력 이월", "POLICY_REJECTION": "정책 거부", "QTY_MISMATCH": "수량 대사 불일치",
+    "QTY_WHOLE_OPEN_ABOVE_LIMIT_ZERO_FILL": "시가가 지정 한도 초과로 미체결", "RECONCILIATION_RELEASE_INCOMPLETE": "대사 차단 해제 미완료",
+    "RUN_MISSED": "실행 누락", "SETTLEMENT_DATE_DIFFERS_FROM_COMPUTED": "결제일이 계산과 다름", "SETTLEMENT_DATE_MISMATCH": "결제일 대사 불일치",
+    "STOCK_NAME_ABOVE_ALERT_WEIGHT": "개별 종목 경보 기준 초과", "STOCK_SLEEVE_ABOVE_TARGET": "개별주 슬리브 목표 초과",
+    "USER_ORDER_NOT_PLANNED_DATA_MISSING": "자료 없음으로 사용자 주문 미계획", "USER_ORDER_REJECTED_BY_POLICY": "정책에 따라 사용자 주문 거부",
+    "VALUATION_FX_REQUIRED": "환산 환율 필요",
+}
+
+
 class ScreenError(ValueError):
     pass
 
@@ -130,12 +151,28 @@ def screen_problems(view: dict) -> list[str]:
         for key in value if isinstance(value, dict) else ():
             if any(_contains_token(str(key), t) for t in TOKENS):
                 problems.append(f"NESTED_KEY_FORBIDDEN:{name}.{key}")
-        text = json.dumps(value, ensure_ascii=False)  # not lower-cased first: _words needs the case boundaries
+        text = json.dumps(_free_text(name, value), ensure_ascii=False)  # not lower-cased first: _words needs the case boundaries
         problems += [f"TOKEN_IN_VALUE:{name}:{t}" for t in TOKENS if _contains_token(text, t)]
-    problems += [f"TOKEN_IN_LABEL:{k}:{t}" for k, label in LABELS_KO.items() for t in TOKENS if _contains_token(label, t)]
+        if name == "ALERTS":  # A8-2: an unregistered alert string is also screened for the valuation words
+            problems += [f"VALUATION_WORD_IN_ALERT:{w}" for w in VALUATION_WORDS if _contains_token(text, w)]
+    problems += [f"TOKEN_IN_LABEL:{k}:{t}" for k, label in {**LABELS_KO, **CODE_LABELS_KO}.items() for t in TOKENS if _contains_token(label, t)]
     if table_sha256() != TABLE_SHA256:
         problems.append("FORBIDDEN_TABLE_HASH_MISMATCH")
     return problems
+
+
+def _free_text(name: str, value: object) -> object:
+    """A8-2: the value without the registered codes (an ALERTS entry, or a segment of HALTED:<reason>)."""
+    if name == "ALERTS" and isinstance(value, list):
+        return [v for v in value if not (isinstance(v, str) and v in CODE_LABELS_KO)]
+    if name == "RUN_STATUS" and isinstance(value, str):
+        return ":".join(part for part in value.split(":") if part not in CODE_LABELS_KO)
+    return value
+
+
+def code_text(code: str) -> str:
+    """A registered code with its Korean label; any other string as it is."""
+    return f"{code} ({CODE_LABELS_KO[code]})" if isinstance(code, str) and code in CODE_LABELS_KO else str(code)
 
 
 def check_screen(view: dict) -> dict:
@@ -160,7 +197,7 @@ def render_rows(view: dict) -> list[tuple[str, str]]:
         elif isinstance(value, dict):
             text = "; ".join(f"{k} {v}" for k, v in value.items()) or "-"
         elif isinstance(value, list):
-            text = ", ".join(value) or "없음"
+            text = ", ".join(code_text(v) for v in value) or "없음"  # A8-2: registered codes with their Korean labels
         else:
             text = "-" if value is None else str(value)
         rows.append((LABELS_KO[name], text))
