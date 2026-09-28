@@ -57,6 +57,9 @@ CODE_LABELS_KO = {
     "DIVIDEND_WITHHOLDING_DIFFERS_FROM_COMPUTED": "원천징수액이 계산과 다름", "ENGINE_HALT": "엔진 정지",
     "FEE_ABOVE_ESTIMATE": "수수료가 추정보다 큼", "FEE_EXCEEDED_ESTIMATE": "수수료 추정 초과", "FILL_OPEN_PRICE_MISSING": "체결 시가 없음",
     "HELD_TICKER_PRICE_MISSING": "보유 종목 시세 없음(티커 확인 필요)", "TICKER_CHANGE_RELEASE_INCOMPLETE": "티커 변경 차단 해제 미완료",  # G4 ANNEX_9
+    "HELD_TICKER_PRICE_RESTORED": "보유 종목 시세 복구", "PROVIDER_PRICE_MISMATCH": "제공처 간 시세 불일치",  # G4 ANNEX_10
+    "PROVIDER_PRICE_MISMATCH_CLEARED": "제공처 간 시세 불일치 해소", "CORPORATE_ACTION_PROVIDER_MISMATCH": "제공처 간 기업행동 불일치",
+    "PRIMARY_ERROR": "주 제공처 자료 오류", "SECONDARY_PRICE_UNAVAILABLE": "보조 제공처 시세 없음",
     "FINALIZATION_RECHECK_NO_CHANGE": "13:30 재확인 변경 없음", "FREE_CASH_BELOW_FLOOR": "자유현금 하한 미만", "FX_FINALIZED": "환율 확정",
     "INPUT_REVISED": "입력 수정됨", "PARTIAL_FILL": "부분 체결", "PENDING_REDUCED_TO_FREE_CASH": "대기 현금을 자유현금 한도로 줄임",
     "PLAN_INPUTS_DEFERRED_DATA_MISSING": "자료 없음으로 계획 입력 이월", "POLICY_REJECTION": "정책 거부", "QTY_MISMATCH": "수량 대사 불일치",
