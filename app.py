@@ -7,14 +7,16 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 try:  # inside AutoTrader (tests, G3 checks)
-    from track_c.ops.dashboard import perf
+    from track_c.ops.dashboard import experiment, perf
     from track_c.ops.dashboard.reader import GitHubReader
     from track_c.ops.dashboard.view import build_view, check_screen, render_rows
 except ImportError:  # the public repository holds these files side by side
+    import experiment
     import perf
     from reader import GitHubReader
     from view import build_view, check_screen, render_rows
 
+ACCOUNTS = ["모의운용 (C0)", "실험 계좌"]
 STATUS_COLORS = {perf.STATUS_OK: "#2e7d32", perf.STATUS_ALERT: "#ef8f00", perf.STATUS_HALT: "#c62828"}
 WEEKDAYS = ["월", "화", "수", "목", "금"]
 # ANNEX_11 (1): the element toolbar of charts and tables (data view, save, copy) is hidden; nothing leaves the page
@@ -171,16 +173,93 @@ def todo_and_schedule(st, data: dict, now: datetime) -> None:
         st.info("입금 내역이 없습니다.")
 
 
+def experiment_page(st, alt, reader) -> None:
+    """EXPERIMENT_ACCOUNT_CONTRACT_V2: the notice always on top; one slot selected at a time; no figure of another slot or of C0."""
+    st.title("실험 계좌")
+    st.error(experiment.NOTICE)
+    try:
+        slots = reader.experiment_slots()
+        if not slots:
+            st.info("실험 슬롯 상태가 아직 없습니다.")
+            return
+        slot = st.selectbox("슬롯", slots, key="slot")
+        state = reader.experiment_state(slot)
+        closes = reader.experiment_closes(experiment.sessions(state))
+        rows = experiment.daily(state, closes, reader.experiment_fx())
+    except Exception:
+        st.error("데이터를 읽지 못했습니다. 설정과 토큰 권한을 확인하세요.")  # X-1: no traceback and no values
+        return
+    st.caption(f"슬롯 {slot} · 상태 {state['last_run']['kind']} · 기준 장 {state['latest']['session']} · 이 슬롯만 표시합니다.")
+    if rows:
+        last = rows[-1]
+        a, b, c = st.columns(3)
+        a.metric("평가액 (원화, 환율 효과 포함)", krw(last["value_krw"]))
+        a.metric("평가액 (달러)", usd(last["value_usd"]))
+        b.metric("손익 (원화)", signed_krw(last["gain_krw"]))
+        b.metric("손익 (달러)", signed_usd(last["gain_usd"]))
+        c.metric("시작 대비 (원화)", pct(last["return_krw"]))
+        c.metric("시작 대비 (달러)", pct(last["return_usd"]))
+        st.caption("시작 자금 3,000,000원을 한 번 환전한 뒤 추가 입금이 없으므로, 시작 대비 변화가 시간가중수익률과 같습니다.")
+    else:
+        st.info("평가할 수 있는 장이 아직 없습니다.")
+    tabs = st.tabs(["평가금액 추이", "보유 종목", "거래 내역", "경보"])
+    with tabs[0]:
+        if rows:
+            unit = st.radio("통화", ["달러", "원화"], horizontal=True, key="x_unit")
+            key = "usd" if unit == "달러" else "krw"
+            data = [{"session": r["session"], "amount": float(r[f"value_{key}"])} for r in rows]
+            st.altair_chart(alt.Chart(alt.Data(values=data)).mark_line(point=True).encode(
+                x=alt.X("session:T", title="장"), y=alt.Y("amount:Q", title="달러" if key == "usd" else "원", scale=alt.Scale(zero=False)),
+                tooltip=[alt.Tooltip("session:T", title="장"), alt.Tooltip("amount:Q", title="평가액", format=",.2f")]),
+                use_container_width=True)
+        else:
+            st.info("평가할 수 있는 장이 아직 없습니다.")
+    with tabs[1]:
+        last_session = experiment.sessions(state)[-1] if experiment.sessions(state) else None
+        held = experiment.holdings(state, closes.get(last_session, {}) if last_session else {})
+        if held:
+            st.table([{"티커": h["symbol"], "수량": f"{h['qty']:,.6f}".rstrip("0").rstrip("."), "매수일": h["entry_session"] or "-",
+                       "현재가": usd(h["price"]), "평가액": usd(h["value"]), "손익": signed_usd(h["gain"]),
+                       "비중": "-" if h["share"] is None else f"{h['share'] * 100:.2f}%"} for h in held])
+        else:
+            st.info("보유 종목이 없습니다.")
+        orders = experiment.pending(state)
+        if orders:
+            st.markdown("**다음 시가 주문 예정**: " + ", ".join(f"{o['symbol']} {o['side']} ({o['reason_ko']})" for o in orders))
+    with tabs[2]:
+        done = experiment.trades(state)
+        if done:
+            st.table([{"장": t["session"], "티커": t["symbol"], "구분": "매수" if t["side"] == "BUY" else "매도", "수량": t["qty"],
+                       "체결가": usd(experiment.Decimal(t["price"])), "수수료": usd(experiment.Decimal(t["fee"])), "사유": t["reason_ko"]}
+                      for t in done])
+        else:
+            st.info("거래가 아직 없습니다.")
+    with tabs[3]:
+        items = experiment.alerts(state)
+        if not items:
+            st.success("경보 없음")
+        for item in items:
+            st.markdown(f"- **{item['label']}** ({item['code']})" + (f" — {item['detail']}" if item["detail"] else ""))
+
+
 def main(reader=None) -> None:
     import altair as alt
     import streamlit as st
 
     st.set_page_config(page_title="AutoTrader 모의운용", layout="wide")
     st.markdown(HIDE_TOOLBAR, unsafe_allow_html=True)
+    account = st.radio("계좌", ACCOUNTS, horizontal=True, key="account")  # one account at a time; never shown together
+    try:
+        reader = reader or GitHubReader(st.secrets["OPS_READ_TOKEN"], st.secrets.get("OPS_MODE", "synthetic"))
+    except Exception:
+        st.error("데이터를 읽지 못했습니다. 설정과 토큰 권한을 확인하세요.")
+        return
+    if account == ACCOUNTS[1]:
+        experiment_page(st, alt, reader)
+        return
     st.title("AutoTrader 모의운용")
     st.warning(perf.NOTICE + " (본인 전용 화면, G4 ANNEX_11). 열 때마다 새로 계산하며 어디에도 저장하지 않습니다.")
     try:
-        reader = reader or GitHubReader(st.secrets["OPS_READ_TOKEN"], st.secrets.get("OPS_MODE", "synthetic"))
         data = load_all(reader)
         view = check_screen(build_view(data["latest"], data["record"], data["last_run"]))
         rows = perf.daily(data["states"], data["records"])

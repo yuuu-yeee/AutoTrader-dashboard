@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 API = "https://api.github.com"
 STATE_REPO, INPUTS_REPO = "yuuu-yeee/AutoTrader", "yuuu-yeee/AutoTrader-ops-inputs"
 STATE_BRANCH = "ops/phase7-shadow-state"
+EXPERIMENT_BRANCH = "ops/experiment-state"  # EXPERIMENT_ACCOUNT_CONTRACT_V2
+SLOT_ID, DAY = re.compile(r"[A-Z0-9][A-Z0-9-]{0,40}"), re.compile(r"\d{4}-\d{2}-\d{2}")
 MODES = ("synthetic", "live")
 FOLDERS = {"synthetic": "synthetic_v2", "live": "live"}  # G4 ANNEX_6 A6-3: the synthetic state restarted in synthetic_v2/
 
@@ -68,6 +71,29 @@ class GitHubReader:
         with ThreadPoolExecutor(max_workers=8) as pool:
             states = list(pool.map(lambda sha: self._file(STATE_REPO, f"{self.folder}/state.json", sha), shas))
         return states[::-1]
+
+    # EXPERIMENT_ACCOUNT_CONTRACT_V2: the experiment account's state (ops/experiment-state) and data (ops-inputs experiment/), read only
+    def experiment_slots(self) -> list[str]:
+        try:
+            items = self._get(STATE_REPO, "contents/slots", EXPERIMENT_BRANCH)
+        except ReaderError:
+            return []  # no slot state yet
+        return sorted(i["name"] for i in items if i.get("type") == "dir" and SLOT_ID.fullmatch(i.get("name", "")))
+
+    def experiment_state(self, slot: str) -> dict:
+        if not SLOT_ID.fullmatch(slot):
+            raise ReaderError("SLOT_ID_INVALID")
+        return self._file(STATE_REPO, f"slots/{slot}/state.json", EXPERIMENT_BRANCH)
+
+    def experiment_closes(self, sessions: list[str]) -> dict[str, dict]:
+        if any(not DAY.fullmatch(s) for s in sessions):
+            raise ReaderError("SESSION_INVALID")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            docs = list(pool.map(lambda s: self._file(INPUTS_REPO, f"experiment/bars/{s}.json"), sessions))
+        return {s: doc["bars"] for s, doc in zip(sessions, docs)}
+
+    def experiment_fx(self) -> dict[str, str]:
+        return self._file(INPUTS_REPO, "experiment/fx.json")
 
     def records(self, digests: dict[str, str]) -> dict[str, dict]:
         """G4 ANNEX_11: {session: input record} for the given {session: digest}."""
