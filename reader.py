@@ -85,6 +85,16 @@ class GitHubReader:
             raise ReaderError("SLOT_ID_INVALID")
         return self._file(STATE_REPO, f"slots/{slot}/state.json", EXPERIMENT_BRANCH)
 
+    def experiment_changes(self, slot: str) -> list[dict]:
+        """EXPERIMENT_ACCOUNT_CONTRACT_V4: the append-only automatic change log of an adaptive slot (JSON lines); none yet -> []."""
+        if not SLOT_ID.fullmatch(slot):
+            raise ReaderError("SLOT_ID_INVALID")
+        try:
+            item = self._get(STATE_REPO, f"contents/slots/{slot}/changes.jsonl", EXPERIMENT_BRANCH)
+        except ReaderError:
+            return []
+        return [json.loads(line) for line in base64.b64decode(item["content"]).decode("utf-8").splitlines() if line.strip()]
+
     def experiment_closes(self, sessions: list[str]) -> dict[str, dict]:
         if any(not DAY.fullmatch(s) for s in sessions):
             raise ReaderError("SESSION_INVALID")

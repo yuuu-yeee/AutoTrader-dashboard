@@ -19,6 +19,9 @@ except ImportError:  # the public repository holds these files side by side
 ACCOUNTS = ["모의운용 (C0)", "실험 계좌"]
 STATUS_COLORS = {perf.STATUS_OK: "#2e7d32", perf.STATUS_ALERT: "#ef8f00", perf.STATUS_HALT: "#c62828"}
 WEEKDAYS = ["월", "화", "수", "목", "금"]
+COMPARED = ["X1-C4R-V1", "X2-ADAPTIVE"]  # EXPERIMENT_ACCOUNT_CONTRACT_V4 (b)
+COMPARE_CHOICE = "X1·X2 비교"
+STAGE_COLORS = {"AGGRESSIVE": "#1565c0", "NORMAL": "#2e7d32", "CAUTIOUS": "#ef8f00", "PAUSED": "#9e9e9e"}
 # ANNEX_11 (1): the element toolbar of charts and tables (data view, save, copy) is hidden; nothing leaves the page
 HIDE_TOOLBAR = "<style>[data-testid='stElementToolbar'] {display: none !important;}</style>"
 
@@ -173,8 +176,86 @@ def todo_and_schedule(st, data: dict, now: datetime) -> None:
         st.info("입금 내역이 없습니다.")
 
 
+def compare_page(st, alt, reader) -> None:
+    """EXPERIMENT_ACCOUNT_CONTRACT_V4 (b): the experiment slots side by side; no C0 figure is read or shown."""
+    try:
+        states = {s: reader.experiment_state(s) for s in COMPARED}
+        closes = reader.experiment_closes(sorted({d for s in states.values() for d in experiment.sessions(s)}))
+        rows = experiment.comparison(states, closes, reader.experiment_fx())
+    except Exception:
+        st.error("데이터를 읽지 못했습니다. 설정과 토큰 권한을 확인하세요.")
+        return
+    st.caption("두 실험 슬롯의 시작 시점과 규칙이 달라 같은 날짜의 값도 서로 다른 조건의 결과입니다. 모의운용(C0) 수치는 여기에 없습니다.")
+    data = [{"session": p["session"], "slot": r["slot"], "value": float(p["usd"])} for r in rows for p in r["indexed"]]
+    if data:
+        st.altair_chart(alt.Chart(alt.Data(values=data)).mark_line(point=True).encode(
+            x=alt.X("session:T", title="장"), y=alt.Y("value:Q", title="평가금액 (시작 = 100, 달러)", scale=alt.Scale(zero=False)),
+            color=alt.Color("slot:N", title="슬롯", scale=alt.Scale(domain=COMPARED, range=["#ef8f00", "#1565c0"])),
+            tooltip=[alt.Tooltip("session:T", title="장"), alt.Tooltip("slot:N", title="슬롯"), alt.Tooltip("value:Q", title="지수", format=",.2f")]),
+            use_container_width=True)
+    else:
+        st.info("평가할 수 있는 장이 아직 없습니다.")
+    st.table(experiment.comparison_table(rows))
+    st.caption("최대 낙폭 = 일별 평가금액이 그때까지의 고점에서 가장 크게 내려간 비율. 승률·총이익/총손실은 종료 거래(수수료 포함 달러 순손익) 기준.")
+
+
+def adaptive_tabs(st, alt, reader, slot: str, state: dict) -> None:
+    """EXPERIMENT_ACCOUNT_CONTRACT_V4: stage bands with the automatic change marks, effective parameters, scores, optimizations."""
+    try:
+        changes = experiment.change_marks(reader.experiment_changes(slot))
+    except Exception:
+        changes = []
+    eff = experiment.effective(state)
+    tabs = st.tabs(["단계·자동 변경", "현재 파라미터", "점수표", "최적화 이력"])
+    with tabs[0]:
+        bands = experiment.stage_bands(state)
+        if bands:
+            rows = ["최종 단계", "자동 변경"]
+            y = alt.Y("row:N", title=None, sort=rows, scale=alt.Scale(domain=rows))
+            layer = alt.Chart(alt.Data(values=[dict(b, row=rows[0]) for b in bands])).mark_tick(thickness=12, size=26).encode(
+                x=alt.X("session:T", title="장"), y=y, color=alt.Color("label:N", title="최종 단계", scale=alt.Scale(
+                    domain=[experiment.STAGES_KO[s] for s in STAGE_COLORS], range=list(STAGE_COLORS.values()))),
+                tooltip=[alt.Tooltip("session:T", title="장"), alt.Tooltip("label:N", title="단계")])
+            marks = [{"session": c["session"], "label": c["label"], "row": rows[1]} for c in changes]
+            if marks:
+                layer = layer + alt.Chart(alt.Data(values=marks)).mark_point(shape="triangle-down", size=90, filled=True, color="#d81b60").encode(
+                    x="session:T", y=y, tooltip=[alt.Tooltip("session:T", title="장"), alt.Tooltip("label:N", title="자동 변경")])
+            st.altair_chart(layer.properties(height=120), use_container_width=True)
+            st.caption("윗줄 색 = 그날 최종 단계(공격·보통·조심·중단), 아랫줄 ▼ = 자동 변경이 기록된 장.")
+        if changes:
+            st.table([{"장": c["session"], "종류": c["label"], "전": c["before"], "후": c["after"], "이유": c["reason"]}
+                      for c in changes[:50]])
+        else:
+            st.info("자동 변경 기록이 아직 없습니다.")
+    with tabs[1]:
+        p = eff["params"]
+        st.table([{"항목": name, "값": str(p[key])} for name, key in (("가중치 A (눌림)", "wA"), ("가중치 B (반등)", "wB"), ("가중치 C (거래량)", "wC"),
+                                                                    ("가중치 D (상대 강도)", "wD"), ("기준점 오프셋", "threshold_offset"),
+                                                                    ("손절배수 k", "k"), ("최대 보유일 H", "H"))])
+        st.markdown(f"- 최종 단계: **{eff['stage_ko']}** (1층 {experiment.STAGES_KO.get(eff['layer1'], experiment.NONE)}, "
+                    f"2층 {experiment.STAGES_KO.get(eff['layer2'], '제한 없음')})")
+        st.markdown(f"- 마지막 최적화 이후 종료 거래: {eff['since_optimization']}건 · 마지막 최적화: {eff['last_optimization'] or '없음'}")
+    with tabs[2]:
+        rows = experiment.score_rows(state)
+        if rows:
+            st.table([{"티커": r["symbol"], "매수일": r["session"], "보유": "예" if r["held"] else "아니오", "A": f"{r['A']:.1f}", "B": f"{r['B']:.1f}",
+                       "C": f"{r['C']:.1f}", "D": f"{r['D']:.1f}", "총점": f"{r['total']:.1f}", "기준점": r["threshold"], "단계": r["stage"]}
+                      for r in rows])
+        else:
+            st.info("점수 기록이 아직 없습니다.")
+    with tabs[3]:
+        rows = experiment.optimization_rows(state)
+        if rows:
+            st.table([{"장": r["session"], "방식": r["method"], "후보 수": r["evaluated"], "실행 시간(초)": r["runtime_seconds"],
+                       "채택": "예" if r["adopted"] else "아니오", "이유": r["reason"], "현재 목적값": r["current_objective"] or experiment.NONE,
+                       "후보 중 가장 큰 목적값": r["best_objective"] or experiment.NONE} for r in rows])
+        else:
+            st.info("최적화 실행 기록이 아직 없습니다.")
+
+
 def experiment_page(st, alt, reader) -> None:
-    """EXPERIMENT_ACCOUNT_CONTRACT_V2: the notice always on top; one slot selected at a time; no figure of another slot or of C0."""
+    """EXPERIMENT_ACCOUNT_CONTRACT_V2: the notice always on top; one slot selected at a time; no figure of C0. CONTRACT_V4 (b): the
+    X1·X2 comparison is one more choice of the slot box."""
     st.title("실험 계좌")
     st.error(experiment.NOTICE)
     try:
@@ -182,7 +263,11 @@ def experiment_page(st, alt, reader) -> None:
         if not slots:
             st.info("실험 슬롯 상태가 아직 없습니다.")
             return
-        slot = st.selectbox("슬롯", slots, key="slot")
+        choices = slots + ([COMPARE_CHOICE] if set(COMPARED) <= set(slots) else [])
+        slot = st.selectbox("슬롯", choices, key="slot")
+        if slot == COMPARE_CHOICE:
+            compare_page(st, alt, reader)
+            return
         state = reader.experiment_state(slot)
         closes = reader.experiment_closes(experiment.sessions(state))
         rows = experiment.daily(state, closes, reader.experiment_fx())
@@ -190,6 +275,15 @@ def experiment_page(st, alt, reader) -> None:
         st.error("데이터를 읽지 못했습니다. 설정과 토큰 권한을 확인하세요.")  # X-1: no traceback and no values
         return
     st.caption(f"슬롯 {slot} · 상태 {state['last_run']['kind']} · 기준 장 {state['latest']['session']} · 이 슬롯만 표시합니다.")
+    if experiment.is_adaptive(state):
+        eff = experiment.effective(state)
+        if eff["end"]:
+            st.error(f"슬롯 종료: {eff['end']['reason']}")
+        elif eff["stop"]:
+            st.error(f"비상 정지 중 (장 {eff['stop']['session']}): 신규 매수와 최적화를 멈추고 보유분은 청산 규칙대로 처리합니다. "
+                     "해제는 USER 재개 입력 파일이 필요합니다.")
+        else:
+            st.info(f"현재 단계: {eff['stage_ko']}")
     if rows:
         last = rows[-1]
         a, b, c = st.columns(3)
@@ -240,6 +334,8 @@ def experiment_page(st, alt, reader) -> None:
             st.success("경보 없음")
         for item in items:
             st.markdown(f"- **{item['label']}** ({item['code']})" + (f" — {item['detail']}" if item["detail"] else ""))
+    if experiment.is_adaptive(state):
+        adaptive_tabs(st, alt, reader, slot, state)
 
 
 def main(reader=None) -> None:
